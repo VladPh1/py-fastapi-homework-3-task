@@ -8,13 +8,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
-
-router = APIRouter()
-
 from config import get_jwt_auth_manager, get_settings
-
-settings = get_settings()
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/accounts/login")
 
 from database import (
     get_db,
@@ -42,6 +36,12 @@ from schemas import (
 from security.passwords import hash_password, verify_password
 
 
+router = APIRouter()
+
+
+settings = get_settings()
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/accounts/login")
+
 
 async def get_current_user(
         token: str = Depends(oauth2_scheme),
@@ -63,7 +63,6 @@ async def get_current_user(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     return user
-
 
 
 @router.post("/register/", response_model=UserRegistrationResponseSchema, status_code=status.HTTP_201_CREATED)
@@ -247,7 +246,10 @@ async def reset_password_complete(
         result = await db.execute(select(UserModel).where(UserModel.email == payload.email))
         user = result.scalars().first()
 
-        if not user.is_active:
+        if not user:
+            raise HTTPException(status_code=400, detail="Invalid email or token.")
+
+        if not user or not user.is_active:
             raise HTTPException(status_code=400, detail="Invalid email or token.")
 
         token_result = await db.execute(
