@@ -8,17 +8,14 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
-# --- ВАЖЛИВО: Ініціалізація router ДО імпорту локальних модулів ---
-# Це розриває коло циклічних імпортів
+
 router = APIRouter()
 
-# --- Config imports ---
 from config import get_jwt_auth_manager, get_settings
 
 settings = get_settings()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/accounts/login")
 
-# --- Database imports ---
 from database import (
     get_db,
     UserModel,
@@ -29,7 +26,6 @@ from database import (
     RefreshTokenModel
 )
 
-# --- Schema imports ---
 from schemas import (
     UserRegistrationRequestSchema,
     UserRegistrationResponseSchema,
@@ -43,11 +39,9 @@ from schemas import (
     MessageResponseSchema
 )
 
-# --- Security imports ---
 from security.passwords import hash_password, verify_password
 
 
-# --- Dependencies ---
 
 async def get_current_user(
         token: str = Depends(oauth2_scheme),
@@ -71,19 +65,16 @@ async def get_current_user(
     return user
 
 
-# --- Endpoints ---
 
 @router.post("/register/", response_model=UserRegistrationResponseSchema, status_code=status.HTTP_201_CREATED)
 async def register(
         user_data: UserRegistrationRequestSchema,
         db: AsyncSession = Depends(get_db)
 ):
-    # 1. Check if email exists
     result = await db.execute(select(UserModel).where(UserModel.email == user_data.email))
     if result.scalars().first():
         raise HTTPException(status_code=409, detail=f"A user with this email {user_data.email} already exists.")
 
-    # 2. Get default group
     group_result = await db.execute(select(UserGroupModel).where(UserGroupModel.name == UserGroupEnum.USER))
     default_group = group_result.scalars().first()
 
@@ -91,7 +82,6 @@ async def register(
         raise HTTPException(status_code=500, detail="Default user group not found.")
 
     try:
-        # 3. Create User (використовуємо _hashed_password)
         new_user = UserModel(
             email=user_data.email,
             _hashed_password=hash_password(user_data.password),
@@ -101,7 +91,6 @@ async def register(
         db.add(new_user)
         await db.flush()
 
-        # 4. Create Activation Token
         token_str = str(uuid.uuid4())
         activation_token = ActivationTokenModel(
             user_id=new_user.id,
@@ -137,7 +126,6 @@ async def activate_account(
         raise HTTPException(status_code=400, detail="User account is already active.")
 
     token_record = user.activation_token
-    # Перевіряємо токен (тести надсилають поле 'token')
     if not token_record or token_record.token != payload.token:
         raise HTTPException(status_code=400, detail="Invalid or expired activation token.")
 
@@ -161,7 +149,6 @@ async def login(
         result = await db.execute(select(UserModel).where(UserModel.email == payload.email))
         user = result.scalars().first()
 
-        # Використовуємо _hashed_password
         if not user or not verify_password(payload.password, user._hashed_password):
             raise HTTPException(status_code=401, detail="Invalid email or password.")
 
@@ -233,7 +220,6 @@ async def request_password_reset(
     if not user or not user.is_active:
         return generic_response
 
-    # Видаляємо старі токени
     existing_tokens = await db.execute(
         select(PasswordResetTokenModel).where(PasswordResetTokenModel.user_id == user.id)
     )
@@ -261,7 +247,7 @@ async def reset_password_complete(
         result = await db.execute(select(UserModel).where(UserModel.email == payload.email))
         user = result.scalars().first()
 
-        if not user:
+        if not user.is_active:
             raise HTTPException(status_code=400, detail="Invalid email or token.")
 
         token_result = await db.execute(
@@ -270,7 +256,6 @@ async def reset_password_complete(
         )
         token_record = token_result.scalars().first()
 
-        # Вимога тесту: видаляти невалідний токен, якщо він є, але не співпадає
         if token_record and token_record.token != payload.token:
             await db.delete(token_record)
             await db.commit()
@@ -284,7 +269,6 @@ async def reset_password_complete(
             await db.commit()
             raise HTTPException(status_code=400, detail="Invalid email or token.")
 
-        # Оновлення пароля
         user._hashed_password = hash_password(payload.password)
         await db.delete(token_record)
         await db.commit()
